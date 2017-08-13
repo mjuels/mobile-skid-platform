@@ -54,6 +54,14 @@ public:
 		}
 	}
 
+	void counted_print(int val){
+			if(print_counter_freq> 0){
+				if(print_counter_freq == print_counter){
+					print(val);
+				}
+			}
+		}
+
 	void count(void){
 		print_counter++;
 		if(print_counter_freq < print_counter){

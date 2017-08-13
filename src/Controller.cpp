@@ -52,19 +52,12 @@ void controller::SampleController(float error)
     for (i = 1; i < Order; i++) {
         CtrlSignal = CtrlSignal + (*(Num + i))*(*(eHist + i)) - (*(Den + i)) * (*(uHist + i));
     }
-    *uHist = CtrlSignal;
 
+    // Saturation - Anti Wind up
+    *uHist = General::saturate(CtrlSignal, uMin, uMax);
 
     // Update speed
     u = *uHist;
-
-    // Saturation
-    u = General::saturate(u, uMin, uMax);
-
-    // Anti windup
-    if ((u > uMax) || (u < uMin)) {
-        *uHist = u;
-    }
 
     return;
 };

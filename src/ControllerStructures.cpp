@@ -38,6 +38,23 @@ controller ControllerStructures::P_Controller(float Kp) {
 
 }
 
+controller ControllerStructures::PI_Controller(float Ts, float Kp, float Ki) {
+	const int Order = 2;
+	float Num[Order];
+	float Den[Order];
+
+	// Numerator coefficients
+	Num[0] = Kp+Ts/2*Ki;
+	Num[1] = Ts/2*Ki-Kp;
+
+	// Denominator Coefficients
+	Den[0] = 1;
+	Den[1] = -1;
+
+	return controller(Order, &Num[0], &Den[0]);
+
+}
+
 controller ControllerStructures::Lead_Controller(float Ts, float q, float p, float K)
 {
     const int Order = 3;

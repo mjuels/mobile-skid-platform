@@ -28,6 +28,7 @@ public:
 
     // Methods
     controller(int Order, float * NumVal, float * DenVal);
+    controller(void){};
     void SampleController(float error);
     void ResetController(void);
     void PrintCoefficients(void);

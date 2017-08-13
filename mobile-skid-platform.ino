@@ -4,11 +4,13 @@
  send me an e-mail:  kristianl@tkjelectronics.com
  */
 
-#include "Arduino.h"
 #include <PS3BT.h>
 #include <usbhub.h>
+#include <Encoder.h>
+
 #include "StatusDisplay.h"
-#include "Motor.h"
+#include "MotorWithSpeedControl.h"
+#include "ControllerStructures.h"
 
 #define TRACK_WIDTH 0.16 // meters
 #define WHEEL_RADIUS 0.06 // meters
@@ -18,10 +20,11 @@
 
 #define MOTOR_SPEED_RATING 291 // rpm
 
-#define JOY_THRES 0.02
+#define JOY_THRES 5
 
 #define DEADMAN_BUTTON R1
-#define FULL_RANGE 1000.0
+#define FULL_RANGE_LINEAR 160
+#define FULL_RANGE_ANGULAR 80
 
 #define BATTERY_VOLTAGE 11.1
 #define MOTOR_VOLTAGE_RATING 7.2
@@ -39,35 +42,58 @@ PS3BT PS3(&Btd, 0x00, 0x1A, 0x7D, 0xDA, 0x71, 0x13); // This will also store the
 
 bool printTemperature, printAngle;
 
+float SampleTime = 0.03; // [s]
+//float WheelDia = 0.1207; // [m]
+//float WheelCircum;
+
+float EncoderPPR = 12000;
+
+
 // Motor Design
 // - Motors are specified by two pins: A and B
 // 	 A is used as pwm pin
 //		For mega, this must be pins 2-13 and 44-46
 //   B is used as digital H/L to control directionq
 //		This can be any digital pin
+// - First 2 arguments are motor pins
+// - Second 2 arguments are encoder pins
+// *** It was attempted to use a composite pattern for the motors, but the control got too bumpy ***
+MotorWithSpeedControl left_back_motor 	= MotorWithSpeedControl(2, 3, 19, 33,  SampleTime, EncoderPPR);
+MotorWithSpeedControl left_front_motor 	= MotorWithSpeedControl(4, 5, 18, 32,  SampleTime, EncoderPPR);
+MotorWithSpeedControl right_front_motor = MotorWithSpeedControl(44, 42, 20, 31,SampleTime, EncoderPPR);
+MotorWithSpeedControl right_back_motor 	= MotorWithSpeedControl(45, 43, 21, 30,SampleTime, EncoderPPR);
 
+float speed_kp = .01;
+float speed_ki = .1;
 
-// Create motors
-motor left_back_motor 	= motor(2, 3);
-motor left_front_motor 	= motor(4, 5);
-motor right_front_motor = motor(44, 42);
-motor right_back_motor 	= motor(45, 43);
-
-
-float left_pwm_rel;
-float right_pwm_rel;
+float left_rpm;
+float right_rpm;
 
 void setup() {
+	Serial.begin(115200);
 
+	left_back_motor.AssignSpeedController(ControllerStructures::PI_Controller(SampleTime, speed_kp, speed_ki));
+	left_front_motor.AssignSpeedController(ControllerStructures::PI_Controller(SampleTime, speed_kp, speed_ki));
+	right_back_motor.AssignSpeedController(ControllerStructures::PI_Controller(SampleTime, speed_kp, speed_ki));
+	right_front_motor.AssignSpeedController(ControllerStructures::PI_Controller(SampleTime, speed_kp, speed_ki));
+
+	// Compensate for direction
+	right_front_motor.SetReverse(true);
+	right_back_motor.SetReverse(true);
+
+	float SampleFreq = 1/SampleTime; // [Hz]
 	// initialize Timer4
 	noInterrupts(); // disable all interrupts
 	TCCR4A = 0;
 	TCCR4B = 0;
 	TCNT4 = 0;
 
-	OCR4A = 6250; // compare match register 16MHz/256/10Hz
-	TCCR4B |= (1 << WGM12); // CTC mode
+	int Prescaler = 256;
+
+	OCR4A = (int) (16000000/Prescaler/SampleFreq); // compare match register 16MHz/256/10Hz
+
 	TCCR4B |= (1 << CS12); // 256 prescaler
+	TCCR4B |= (1 << WGM12); // CTC mode
 	TIMSK4 |= (1 << OCIE4A); // enable timer compare interrupt
 	interrupts(); // enable all interrupts
 
@@ -78,7 +104,7 @@ void setup() {
 	lcd.print("Booting Arduino");
 	lcd.set_print_counter_freq(100);
 
-	Serial.begin(115200);
+
 	#if !defined(__MIPSEL__)
 		while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
 	#endif
@@ -91,10 +117,15 @@ void setup() {
 	pinMode(LED_PIN,OUTPUT);
 }
 
+
 ISR(TIMER4_COMPA_vect){//timer1 interrupt 1Hz toggles pin 13 (LED)
 //generates pulse wave of frequency 1Hz/2 = 0.5kHz (takes two cycles for full wave- toggle high then toggle low)
-	LED_STATE = !LED_STATE;
-	digitalWrite(LED_PIN,LED_STATE);
+
+	left_back_motor.SampleSpeedController();
+	left_front_motor.SampleSpeedController();
+	right_back_motor.SampleSpeedController();
+	right_front_motor.SampleSpeedController();
+
 }
 
 
@@ -103,8 +134,8 @@ void loop() {
   lcd.setCursor(0, 0);
   lcd.count();
 
-  left_pwm_rel = 0;
-  right_pwm_rel = 0;
+  left_rpm = 0.0;
+  right_rpm = 0.0;
 
   if (PS3.PS3Connected || PS3.PS3NavigationConnected) {
 	  if(PS3.getButtonPress(DEADMAN_BUTTON)){
@@ -112,40 +143,32 @@ void loop() {
 		  	  int angular_axis = PS3.getAnalogHat(RightHatX);
 		  	  int linear_axis  = PS3.getAnalogHat(LeftHatY);
 
-		  	  float angular_rel = map(angular_axis, 0, 255, -FULL_RANGE, FULL_RANGE)/FULL_RANGE;
-		  	  float linear_rel = map(linear_axis, 0, 255, FULL_RANGE, -FULL_RANGE)/FULL_RANGE;
+		  	  float angular = map(angular_axis, 0, 255, -FULL_RANGE_ANGULAR, FULL_RANGE_ANGULAR); // [Input in RPM]
+		  	  float linear = map(linear_axis, 0, 255, FULL_RANGE_LINEAR, -FULL_RANGE_LINEAR); // [Input in RPM]
 
-		  	  if(fabs(angular_rel) < JOY_THRES){
-		  		  angular_rel = 0;
+		  	  if(fabs(angular) < JOY_THRES){
+		  		  angular = 0;
 		  	  }
 
-		  	  if(fabs(linear_rel) < JOY_THRES){
-		  	  		  linear_rel = 0;
+		  	  if(fabs(linear) < JOY_THRES){
+		  	  		  linear = 0;
 		  	  	  }
 
-		  	  float angular = angular_rel*ANGULAR_SCALE;
-		  	  float linear = linear_rel*LINEAR_SCALE;
+		  	  left_rpm 	= linear - angular*TRACK_WIDTH/WHEEL_RADIUS/2;
+		  	  right_rpm = linear + angular*TRACK_WIDTH/WHEEL_RADIUS/2;
 
-		  	  float vel_longi = angular*TRACK_WIDTH/2;
-
-		  	  float left_mps = linear - vel_longi;
-		  	  float right_mps = linear + vel_longi;
-
-		  	  float left_rpm = left_mps*60/(2*PI*WHEEL_RADIUS);
-		  	  float right_rpm = right_mps*60/(2*PI*WHEEL_RADIUS);
-
-		  	  left_pwm_rel = left_rpm/MOTOR_SPEED_RATING*MOTOR_VOLTAGE_RATING/BATTERY_VOLTAGE;
-		  	  right_pwm_rel = right_rpm/MOTOR_SPEED_RATING*MOTOR_VOLTAGE_RATING/BATTERY_VOLTAGE;
-
-		  	  lcd.counted_print("Left:  ");
-		  	  lcd.counted_print(left_pwm_rel);
-		  	  lcd.counted_print(" %");
+		  	  lcd.counted_print("L: ");
+		  	  lcd.counted_print((int) left_front_motor.GetMeasuredSpeed());
+		  	  lcd.counted_print("/");
+		  	  lcd.counted_print((int) left_front_motor.GetPresentSpeedReference());
+		  	  lcd.counted_print(" rpm   ");
 
 		  	  lcd.setCursor(0, 1);
-		  	  lcd.counted_print("Right: ");
-		  	  lcd.counted_print(right_pwm_rel);
-		  	  lcd.counted_print(" %");
-
+		  	  lcd.counted_print("R: ");
+		  	  lcd.counted_print((int) right_front_motor.GetMeasuredSpeed());
+		  	  lcd.counted_print("/");
+		  	  lcd.counted_print((int) right_front_motor.GetPresentSpeedReference());
+		  	  lcd.counted_print(" rpm   ");
 	  }
 	  else{
 		  // Deadman button not pressed
@@ -163,9 +186,12 @@ void loop() {
   }
 
   // Apply speed reference to motors
-  right_back_motor.SetSpeed(right_pwm_rel);
-  right_front_motor.SetSpeed(right_pwm_rel);
-  left_back_motor.SetSpeed(left_pwm_rel);
-  left_front_motor.SetSpeed(left_pwm_rel);
+  left_front_motor.SetAbsoluteSpeedReference(left_rpm);
+  left_back_motor.SetAbsoluteSpeedReference(left_rpm);
+  right_front_motor.SetAbsoluteSpeedReference(right_rpm);
+  right_back_motor.SetAbsoluteSpeedReference(right_rpm);
+
+
+
 
 }

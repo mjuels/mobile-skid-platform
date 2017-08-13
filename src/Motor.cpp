@@ -9,8 +9,7 @@
 * @param PB Pin B of the motor
 * @return The motor object
 */
-motor::motor(int PA, int PB) 
-{
+motor::motor(int PA, int PB){
     // Assign the pins
 	PinA = PA;
 	PinB = PB;
@@ -24,10 +23,10 @@ motor::motor(int PA, int PB)
 * @param[out] PresentSpeed 
 * @return The present speed of the motor as a PWM byte value
 */
-int motor::GetSpeed() 
+int motor::GetPresentDutyCycle() 
 {
 	// Return the speed
-    return PresentSpeed;
+    return PresentDuty;
 }
 
 /** Sets the speed of the motor
@@ -40,7 +39,7 @@ int motor::GetSpeed()
 * @param [in] RelativeSpeed The fractional speed to assign the motor.
 * 
 */
-void motor::SetSpeed(float RelativeSpeed) 
+void motor::ApplySpeedDutyCycle(float RelativeSpeed)
 {
     // Saturate the desired speed to the safe range
     float SafeSpeed = General::saturate(RelativeSpeed, MinSafeRelativeSpeed, MaxSafeRelativeSpeed);
@@ -49,14 +48,14 @@ void motor::SetSpeed(float RelativeSpeed)
     int ConvertedSpeed = (int)(SafeSpeed*MaxPWMPinVal);
 
     // Test if a new speed is requested
-	if (PresentSpeed != ConvertedSpeed) {
+	if (PresentDuty != ConvertedSpeed) {
 		
 /*
         Serial.print("Setting new speed: ");
 		Serial.println(ConvertedSpeed);
 */
         // Assign the desired speed to the present speed
-		PresentSpeed = ConvertedSpeed;
+		PresentDuty = ConvertedSpeed;
 
         // Depending on speed sign, let the motor go either forward, backward or brake
 		if (ConvertedSpeed < 0) {
@@ -103,3 +102,15 @@ void motor::brake()
     digitalWrite(PinA, false);
 	digitalWrite(PinB, false);
 }
+
+/*! Set the speed reference of the motor
+ *
+ */
+void motor::SetAbsoluteSpeedReference(float speed_ref) {
+	SpeedReference = General::saturate(speed_ref, -MaxSpeedReference, MaxSpeedReference);
+}
+
+int motor::GetPresentSpeedReference() {
+	return SpeedReference;
+}
+
